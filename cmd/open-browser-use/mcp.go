@@ -282,9 +282,39 @@ func mcpTools() []mcpTool {
 			}, nil),
 		},
 		{
+			Name:        "snapshot",
+			Title:       "Snapshot Page",
+			Description: "Compact text outline of the current page: interactive elements as [ref] role \"name\" value, plus headings, paragraphs and table rows in the viewport. Use query to search the whole page instead of scrolling. Prefer this over cdp.",
+			InputSchema: objectSchema(map[string]any{
+				"tab_id":    integerSchema("Optional Chrome tab id. Defaults to the current tab."),
+				"query":     stringSchema("Optional case-insensitive text to find anywhere on the page."),
+				"full_page": map[string]any{"type": "boolean", "description": "Include content outside the viewport.", "default": false},
+			}, nil),
+		},
+		{
+			Name:        "act",
+			Title:       "Act On Element",
+			Description: "Act on an element by ref from snapshot, then return the new snapshot. Actions: click, fill (value), select (option value or text), check, uncheck, press (key, default Enter), focus.",
+			InputSchema: objectSchema(map[string]any{
+				"tab_id": integerSchema("Optional Chrome tab id. Defaults to the current tab."),
+				"ref":    stringSchema("Element ref from snapshot."),
+				"action": map[string]any{"type": "string", "enum": []string{"click", "fill", "select", "check", "uncheck", "press", "focus"}},
+				"value":  stringSchema("Text for fill, option for select, key for press."),
+			}, []string{"ref", "action"}),
+		},
+		{
+			Name:        "scroll",
+			Title:       "Scroll Page",
+			Description: "Scroll the current page by most of a viewport and return the new snapshot.",
+			InputSchema: objectSchema(map[string]any{
+				"tab_id":    integerSchema("Optional Chrome tab id. Defaults to the current tab."),
+				"direction": map[string]any{"type": "string", "enum": []string{"down", "up"}, "default": "down"},
+			}, nil),
+		},
+		{
 			Name:        "cdp",
 			Title:       "Run CDP Command",
-			Description: "Run a Chrome DevTools Protocol command against a managed tab.",
+			Description: "Run a raw Chrome DevTools Protocol command against a managed tab. Low level; prefer snapshot/act.",
 			InputSchema: objectSchema(map[string]any{
 				"tab_id": integerSchema("Optional Chrome tab id. Defaults to the current tab."),
 				"method": stringSchema("Chrome DevTools Protocol method, for example Runtime.evaluate."),
@@ -439,6 +469,9 @@ func (server *mcpServer) callTool(params json.RawMessage) (map[string]any, error
 	if err != nil {
 		return mcpToolErrorResult(err.Error()), nil
 	}
+	if text, ok := output.(textOutput); ok {
+		return mcpTextToolResult(string(text)), nil
+	}
 	return mcpToolResult(output)
 }
 
@@ -472,6 +505,8 @@ func (server *mcpServer) runTool(name string, arguments map[string]any) (any, er
 		return server.runWaitLoadTool(arguments)
 	case "page_info":
 		return server.runPageInfoTool(arguments)
+	case "snapshot", "act", "scroll":
+		return server.runSnapshotTool(name, arguments)
 	case "cdp":
 		return server.runCDPTool(arguments)
 	case "move_mouse":
@@ -587,6 +622,45 @@ func (server *mcpServer) runPageInfoTool(arguments map[string]any) (any, error) 
 	}
 	response, _, err := server.runner.runPageInfoAction(args)
 	return response, err
+}
+
+func (server *mcpServer) runSnapshotTool(name string, arguments map[string]any) (any, error) {
+	tabID := server.runner.currentTabID
+	if value, ok, err := optionalIntArg(arguments, "tab_id"); err != nil {
+		return nil, err
+	} else if ok {
+		tabID = value
+	}
+	if tabID <= 0 {
+		return nil, errors.New(name + " requires tab_id or a previous open_tab/claim_tab call")
+	}
+	switch name {
+	case "snapshot":
+		opts := map[string]any{}
+		if query := optionalStringArg(arguments, "query"); query != "" {
+			opts["query"] = query
+		}
+		if fullPage, ok := arguments["full_page"].(bool); ok && fullPage {
+			opts["full_page"] = true
+		}
+		return server.runner.runSnapshotAction(tabID, opts)
+	case "act":
+		ref, err := requiredStringArg(arguments, "ref")
+		if err != nil {
+			return nil, err
+		}
+		action, err := requiredStringArg(arguments, "action")
+		if err != nil {
+			return nil, err
+		}
+		return server.runner.runActAction(tabID, ref, action, optionalStringArg(arguments, "value"))
+	default:
+		direction := optionalStringArg(arguments, "direction")
+		if direction != "up" {
+			direction = "down"
+		}
+		return server.runner.runScrollAction(tabID, direction)
+	}
 }
 
 func (server *mcpServer) runCDPTool(arguments map[string]any) (any, error) {
