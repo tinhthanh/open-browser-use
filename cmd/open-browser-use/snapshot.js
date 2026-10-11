@@ -70,8 +70,12 @@
       if (text.trim()) return clean(text, 80);
     }
     if (el.labels && el.labels.length) {
-      // Label text minus the control's own value (labels often wrap the input).
-      const text = Array.from(el.labels).map((label) => label.innerText).join(' ');
+      // Labels often wrap the control; drop the control's own text (e.g. <option>s).
+      const text = Array.from(el.labels).map((label) => {
+        const copy = label.cloneNode(true);
+        copy.querySelectorAll('select,textarea,input,button').forEach((child) => child.remove());
+        return copy.textContent;
+      }).join(' ');
       if (text.trim()) return clean(text, 80);
     }
     const attr = el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt');
@@ -176,11 +180,19 @@
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     };
-    if (action === 'click') return { mouse: center() };
+    // Agent tabs usually run in the background, where Chromium does not route
+    // CDP input events to the page; fall back to DOM events there.
+    const hidden = document.visibilityState !== 'visible';
+    const click = () => {
+      if (!hidden) return { mouse: center() };
+      el.click();
+      return { done: 'clicked' };
+    };
+    if (action === 'click') return click();
     if (action === 'check' || action === 'uncheck') {
       const checked = 'checked' in el ? el.checked : el.getAttribute('aria-checked') === 'true';
       if (checked === (action === 'check')) return { done: `already ${action}ed` };
-      return { mouse: center() };
+      return click();
     }
     if (action === 'fill') {
       el.focus();
@@ -204,7 +216,14 @@
     }
     if (action === 'focus' || action === 'press') {
       el.focus();
-      return action === 'press' ? { key: String(opts.value || 'Enter') } : { done: 'focused' };
+      if (action === 'focus') return { done: 'focused' };
+      const key = String(opts.value || 'Enter');
+      if (!hidden) return { key };
+      const init = { key, bubbles: true, cancelable: true };
+      const proceed = el.dispatchEvent(new KeyboardEvent('keydown', init));
+      el.dispatchEvent(new KeyboardEvent('keyup', init));
+      if (proceed && key === 'Enter' && el.form && el.tagName.toLowerCase() === 'input') el.form.requestSubmit();
+      return { done: `pressed ${key}` };
     }
     throw new Error(`unsupported action ${JSON.stringify(action)}; use click|fill|select|check|uncheck|press|focus`);
   }
