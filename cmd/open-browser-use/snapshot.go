@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,6 +22,70 @@ var snapshotScript string
 type textOutput string
 
 const actSettleDelay = 300 * time.Millisecond
+
+var actActions = []string{"click", "fill", "select", "check", "uncheck", "press", "focus"}
+
+const actUsage = `act needs ref and action (click|fill|select|check|uncheck|press|focus); fill/select need value. ` +
+	`Example: {"ref":"3","action":"fill","value":"text"} or {"actions":[{"ref":"1","action":"fill","value":"a"},{"ref":"5","action":"click"}]}`
+
+type actStep struct {
+	ref    string
+	action string
+	value  string
+}
+
+// scalarString accepts the string or number forms models send for refs/values.
+func scalarString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case json.Number:
+		return typed.String()
+	case bool:
+		return strconv.FormatBool(typed)
+	}
+	return ""
+}
+
+func parseActStep(raw map[string]any) (actStep, error) {
+	step := actStep{ref: scalarString(raw["ref"]), action: strings.ToLower(scalarString(raw["action"])), value: scalarString(raw["value"])}
+	if step.ref == "" || step.action == "" {
+		return step, errors.New(actUsage)
+	}
+	valid := false
+	for _, action := range actActions {
+		valid = valid || action == step.action
+	}
+	if !valid {
+		return step, fmt.Errorf("unknown action %q. %s", step.action, actUsage)
+	}
+	if (step.action == "fill" || step.action == "select") && raw["value"] == nil {
+		return step, fmt.Errorf("%s on [%s] needs value. %s", step.action, step.ref, actUsage)
+	}
+	return step, nil
+}
+
+func parseActSteps(arguments map[string]any) ([]actStep, error) {
+	if rawSteps, ok := arguments["actions"].([]any); ok && len(rawSteps) > 0 {
+		steps := make([]actStep, 0, len(rawSteps))
+		for index, rawStep := range rawSteps {
+			object, _ := rawStep.(map[string]any)
+			step, err := parseActStep(object)
+			if err != nil {
+				return nil, fmt.Errorf("actions[%d]: %w", index, err)
+			}
+			steps = append(steps, step)
+		}
+		return steps, nil
+	}
+	step, err := parseActStep(arguments)
+	if err != nil {
+		return nil, err
+	}
+	return []actStep{step}, nil
+}
 
 // keyDefinitions maps the keys agents commonly press to CDP key event fields.
 var keyDefinitions = map[string]struct {
@@ -119,36 +184,57 @@ func (runner *actionRunner) runSnapshotAction(tabID int, opts map[string]any) (t
 	return textOutput(text), err
 }
 
-// runActAction performs one ref-based action and returns the resulting
-// viewport snapshot, so the agent sees the effect without another call.
-func (runner *actionRunner) runActAction(tabID int, ref, action, value string) (textOutput, error) {
+// runActSteps performs ref-based actions in order and returns one snapshot of
+// the result, so the agent sees the effect without another call. On a failed
+// step it reports what already happened instead of discarding that progress.
+func (runner *actionRunner) runActSteps(tabID int, steps []actStep) (textOutput, error) {
 	if err := runner.attach(tabID); err != nil {
 		return "", err
 	}
+	notes := make([]string, 0, len(steps))
+	for index, step := range steps {
+		if index > 0 {
+			time.Sleep(actSettleDelay / 3)
+		}
+		note, err := runner.runActStep(tabID, step)
+		if err != nil {
+			if index == 0 {
+				return "", err
+			}
+			notes = append(notes, fmt.Sprintf("FAILED: %s [%s]: %v (remaining steps skipped)", step.action, step.ref, err))
+			break
+		}
+		notes = append(notes, "ok: "+note)
+	}
+	return runner.settleAndSnapshot(tabID, strings.Join(notes, "\n"))
+}
+
+func (runner *actionRunner) runActStep(tabID int, step actStep) (string, error) {
+	ref, action, value := step.ref, step.action, step.value
 	plan, err := runner.evaluatePage(tabID, "act", map[string]any{"ref": ref, "action": action, "value": value})
 	if err != nil {
 		return "", err
 	}
-	step, _ := plan.(map[string]any)
+	result, _ := plan.(map[string]any)
 	note := fmt.Sprintf("%s [%s]", action, ref)
 	switch {
-	case step["mouse"] != nil:
-		point, _ := step["mouse"].(map[string]any)
+	case result["mouse"] != nil:
+		point, _ := result["mouse"].(map[string]any)
 		x, _ := point["x"].(float64)
 		y, _ := point["y"].(float64)
 		if err := runner.mouseClick(tabID, x, y); err != nil {
 			return "", err
 		}
-	case step["key"] != nil:
-		key, _ := step["key"].(string)
+	case result["key"] != nil:
+		key, _ := result["key"].(string)
 		if err := runner.pressKey(tabID, key); err != nil {
 			return "", err
 		}
 		note = fmt.Sprintf("press %s on [%s]", key, ref)
-	case step["done"] != nil:
-		note = fmt.Sprintf("%s [%s]: %v", action, ref, step["done"])
+	case result["done"] != nil:
+		note = fmt.Sprintf("%s [%s]: %v", action, ref, result["done"])
 	}
-	return runner.settleAndSnapshot(tabID, note)
+	return note, nil
 }
 
 func (runner *actionRunner) runScrollAction(tabID int, direction string) (textOutput, error) {
@@ -158,12 +244,12 @@ func (runner *actionRunner) runScrollAction(tabID int, direction string) (textOu
 	if _, err := runner.evaluatePage(tabID, "scroll", map[string]any{"direction": direction}); err != nil {
 		return "", err
 	}
-	return runner.settleAndSnapshot(tabID, "scroll "+direction)
+	return runner.settleAndSnapshot(tabID, "ok: scroll "+direction)
 }
 
 // settleAndSnapshot waits briefly for the action's effect (including a page
-// navigation) and returns "ok: <note>" followed by the new viewport snapshot.
-func (runner *actionRunner) settleAndSnapshot(tabID int, note string) (textOutput, error) {
+// navigation) and returns the result lines followed by the new viewport snapshot.
+func (runner *actionRunner) settleAndSnapshot(tabID int, header string) (textOutput, error) {
 	time.Sleep(actSettleDelay)
 	runner.waitReady(tabID, 5*time.Second)
 	text, err := runner.snapshotText(tabID, map[string]any{})
@@ -172,10 +258,10 @@ func (runner *actionRunner) settleAndSnapshot(tabID int, note string) (textOutpu
 		time.Sleep(actSettleDelay)
 		runner.waitReady(tabID, 5*time.Second)
 		if text, err = runner.snapshotText(tabID, map[string]any{}); err != nil {
-			return textOutput("ok: " + note + "\n(snapshot unavailable: " + err.Error() + ")"), nil
+			return textOutput(header + "\n(snapshot unavailable: " + err.Error() + ")"), nil
 		}
 	}
-	return textOutput("ok: " + note + "\n" + text), nil
+	return textOutput(header + "\n" + text), nil
 }
 
 // waitReady polls document.readyState until "complete" or the timeout. Errors

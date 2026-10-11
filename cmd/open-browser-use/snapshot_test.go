@@ -208,3 +208,68 @@ func TestActPageErrorIsReturnedAsToolError(t *testing.T) {
 		t.Fatalf("expected tool error for a stale ref, got %#v", result)
 	}
 }
+
+func TestParseActStepsAcceptsNumericRefsAndBatches(t *testing.T) {
+	steps, err := parseActSteps(map[string]any{"actions": []any{
+		map[string]any{"ref": 1.0, "action": "fill", "value": "Nguyen Van A"},
+		map[string]any{"ref": "8", "action": "CLICK"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) != 2 || steps[0].ref != "1" || steps[1].action != "click" {
+		t.Fatalf("unexpected steps %#v", steps)
+	}
+}
+
+func TestParseActStepsExplainsUsage(t *testing.T) {
+	for _, arguments := range []map[string]any{
+		{},
+		{"ref": "1"},
+		{"ref": "1", "action": "help"},
+		{"ref": "1", "action": "fill"},
+	} {
+		if _, err := parseActSteps(arguments); err == nil || !strings.Contains(err.Error(), "Example:") {
+			t.Fatalf("expected usage hint for %#v, got %v", arguments, err)
+		}
+	}
+}
+
+func TestActBatchRunsStepsInOrderWithOneSnapshot(t *testing.T) {
+	var refs []string
+	var mu sync.Mutex
+	snapshots := 0
+	socketPath, _ := startFakeBrowser(t, func(method string, params map[string]any) any {
+		if method != "executeCdp" || params["method"] != "Runtime.evaluate" {
+			return map[string]any{}
+		}
+		commandParams, _ := params["commandParams"].(map[string]any)
+		expression, _ := commandParams["expression"].(string)
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case expression == "document.readyState":
+			return map[string]any{"result": map[string]any{"value": "complete"}}
+		case strings.Contains(expression, `)("act",`):
+			start := strings.Index(expression, `"ref":"`) + len(`"ref":"`)
+			refs = append(refs, expression[start:start+1])
+			return map[string]any{"result": map[string]any{"value": map[string]any{"done": "filled"}}}
+		case strings.Contains(expression, `)("snapshot",`):
+			snapshots++
+			return map[string]any{"result": map[string]any{"value": "Form — http://x\nscroll 0/0px"}}
+		}
+		return map[string]any{"result": map[string]any{}}
+	})
+
+	result := callMCPTool(t, socketPath, `{"jsonrpc":"2.0","id":"b","method":"tools/call","params":{"name":"act","arguments":{"tab_id":7,"actions":[{"ref":"1","action":"fill","value":"a"},{"ref":"2","action":"fill","value":"b"}]}}}`)
+
+	content, _ := result["content"].([]any)
+	first, _ := content[0].(map[string]any)
+	text, _ := first["text"].(string)
+	if !strings.HasPrefix(text, "ok: fill [1]: filled\nok: fill [2]: filled\nForm") {
+		t.Fatalf("unexpected batch result %q", text)
+	}
+	if strings.Join(refs, ",") != "1,2" || snapshots != 1 {
+		t.Fatalf("expected steps 1,2 then one snapshot, got refs=%v snapshots=%d", refs, snapshots)
+	}
+}

@@ -294,13 +294,22 @@ func mcpTools() []mcpTool {
 		{
 			Name:        "act",
 			Title:       "Act On Element",
-			Description: "Act on an element by ref from snapshot, then return the new snapshot. Actions: click, fill (value), select (option value or text), check, uncheck, press (key, default Enter), focus.",
+			Description: "Act on elements by ref from snapshot, then return the new snapshot. Actions: click, fill (value), select (option value or text), check, uncheck, press (key, default Enter), focus. Batch several steps, e.g. a whole form, with actions:[{ref,action,value}].",
 			InputSchema: objectSchema(map[string]any{
 				"tab_id": integerSchema("Optional Chrome tab id. Defaults to the current tab."),
 				"ref":    stringSchema("Element ref from snapshot."),
-				"action": map[string]any{"type": "string", "enum": []string{"click", "fill", "select", "check", "uncheck", "press", "focus"}},
+				"action": map[string]any{"type": "string", "enum": actActions},
 				"value":  stringSchema("Text for fill, option for select, key for press."),
-			}, []string{"ref", "action"}),
+				"actions": map[string]any{
+					"type":        "array",
+					"description": "Steps run in order; stops at the first error.",
+					"items": objectSchema(map[string]any{
+						"ref":    map[string]any{"type": "string"},
+						"action": map[string]any{"type": "string", "enum": actActions},
+						"value":  map[string]any{"type": "string"},
+					}, []string{"ref", "action"}),
+				},
+			}, nil),
 		},
 		{
 			Name:        "scroll",
@@ -645,15 +654,11 @@ func (server *mcpServer) runSnapshotTool(name string, arguments map[string]any) 
 		}
 		return server.runner.runSnapshotAction(tabID, opts)
 	case "act":
-		ref, err := requiredStringArg(arguments, "ref")
+		steps, err := parseActSteps(arguments)
 		if err != nil {
 			return nil, err
 		}
-		action, err := requiredStringArg(arguments, "action")
-		if err != nil {
-			return nil, err
-		}
-		return server.runner.runActAction(tabID, ref, action, optionalStringArg(arguments, "value"))
+		return server.runner.runActSteps(tabID, steps)
 	default:
 		direction := optionalStringArg(arguments, "direction")
 		if direction != "up" {
