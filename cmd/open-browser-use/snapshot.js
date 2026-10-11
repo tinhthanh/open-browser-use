@@ -183,7 +183,16 @@
     // Agent tabs usually run in the background, where Chromium does not route
     // CDP input events to the page; fall back to DOM events there.
     const hidden = document.visibilityState !== 'visible';
+    const invalidFields = () => {
+      const form = el.form;
+      const submits = form && (el.type === 'submit' || (el.tagName.toLowerCase() === 'button' && !el.getAttribute('type')));
+      if (!submits || form.noValidate) return '';
+      const bad = Array.from(form.elements).filter((field) => field.willValidate && !field.checkValidity());
+      return bad.map((field) => `${nameOf(field) || field.name}: ${field.validationMessage}`).join('; ');
+    };
     const click = () => {
+      const invalid = invalidFields();
+      if (invalid) return { done: `not submitted, form invalid — ${invalid}` };
       if (!hidden) return { mouse: center() };
       el.click();
       return { done: 'clicked' };
