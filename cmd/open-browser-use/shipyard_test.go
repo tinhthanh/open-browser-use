@@ -2,12 +2,26 @@ package main
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/ifuryst/open-browser-use/internal/wire"
 )
+
+// fakeShipyardSockets makes checkShipyard and reloadShipyardExtension see
+// the given connected extensions instead of the real browser sockets.
+func fakeShipyardSockets(t *testing.T, list func() []connectedProfileInfo) {
+	t.Helper()
+	old := probeShipyardSockets
+	probeShipyardSockets = list
+	t.Cleanup(func() { probeShipyardSockets = old })
+}
 
 func TestUnpackedExtensionIDMatchesChrome(t *testing.T) {
 	// The id Chromium 154 gave the extension loaded from /opt/ext/obu in the
@@ -60,6 +74,7 @@ func TestShipyardStatusFollowsSetupSteps(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("chrome plugin setup is for macOS and Linux")
 	}
+	fakeShipyardSockets(t, func() []connectedProfileInfo { return nil })
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	plugin := filepath.Join(home, "plugins", "chrome")
@@ -136,5 +151,132 @@ func TestChromeProfileDirsIncludesNamedProfiles(t *testing.T) {
 	got := strings.Join(names, ",")
 	if got != "Default,Profile 6,Shipyard Agent" {
 		t.Fatalf("profiles = %s", got)
+	}
+}
+
+func TestShippedManifestNamesTheBuild(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "extension")
+	if err := writeEmbeddedExtension(dir); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	name, _ := m["version_name"].(string)
+	if name != shippedVersionName() || !strings.HasPrefix(name, m["version"].(string)+" build ") || len(extensionBuild()) != 12 {
+		t.Fatalf("version_name %q, want %q", name, shippedVersionName())
+	}
+	if m["manifest_version"] != float64(3) || m["background"] == nil {
+		t.Fatalf("manifest lost fields: %s", b)
+	}
+}
+
+func TestStatusAsksToReloadAnOlderRunningExtension(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("chrome plugin setup is for macOS and Linux")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	plugin := filepath.Join(home, "plugins", "chrome")
+	os.MkdirAll(plugin, 0o755)
+	p, _ := resolveShipyardPaths(plugin)
+	writeEmbeddedExtension(p.ExtensionDir)
+	writeShipyardNativeManifest(p)
+	os.MkdirAll(p.ProfileDir, 0o700)
+	prefs, _ := json.Marshal(map[string]any{"extensions": map[string]any{"settings": map[string]any{
+		p.ExtensionID: map[string]any{"path": p.ExtensionDir, "manifest": map[string]any{"version": "1.0.0"}},
+	}}})
+	os.WriteFile(filepath.Join(p.ProfileDir, "Secure Preferences"), prefs, 0o600)
+
+	running := ""
+	fakeShipyardSockets(t, func() []connectedProfileInfo {
+		return []connectedProfileInfo{
+			{ExtensionID: p.ExtensionID, Directory: "Profile 6", VersionName: "other profile"},
+			{ExtensionID: p.ExtensionID, Directory: shipyardProfile, VersionName: running},
+		}
+	})
+	if st := checkShipyard(p); st.Ready || st.ExtensionCurrent || !st.Connected || !strings.Contains(st.Problem, "older copy") {
+		t.Fatalf("an old running copy must not be ready: %+v", st)
+	}
+	running = shippedVersionName()
+	if st := checkShipyard(p); !st.Ready || !st.ExtensionCurrent || st.Problem != "" {
+		t.Fatalf("the shipped copy is running: %+v", st)
+	}
+}
+
+func TestReloadShipyardExtensionWaitsForTheNewCopy(t *testing.T) {
+	dir, err := os.MkdirTemp("", "obu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	sock := filepath.Join(dir, "x.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	p := shipyardPaths{ExtensionID: "khljlamhjdojjgoaeildaambelafkkei"}
+	var running atomic.Value
+	running.Store("1.0.0 build old")
+	reloads := make(chan string, 4)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			var req map[string]any
+			if wire.ReadJSON(conn, &req) == nil {
+				method, _ := req["method"].(string)
+				running.Store(shippedVersionName())
+				reloads <- method
+				wire.WriteJSON(conn, map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"reloading": true}})
+			}
+			conn.Close()
+		}
+	}()
+	fakeShipyardSockets(t, func() []connectedProfileInfo {
+		return []connectedProfileInfo{{SocketPath: sock, ExtensionID: p.ExtensionID, Directory: shipyardProfile, VersionName: running.Load().(string)}}
+	})
+	if err := reloadShipyardExtension(p, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-reloads; got != "reloadExtension" {
+		t.Fatalf("sent %q", got)
+	}
+	if err := reloadShipyardExtension(p, time.Second); err != nil || len(reloads) != 0 {
+		t.Fatalf("the current copy must not be reloaded again: %v", err)
+	}
+}
+
+func TestReloadShipyardExtensionExplainsAnOldCopyThatCannotReload(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "obu")
+	defer os.RemoveAll(dir)
+	sock := filepath.Join(dir, "x.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		var req map[string]any
+		wire.ReadJSON(conn, &req)
+		wire.WriteJSON(conn, map[string]any{"jsonrpc": "2.0", "id": req["id"], "error": map[string]any{"code": -32000, "message": "No handler registered for method: reloadExtension"}})
+		conn.Close()
+	}()
+	p := shipyardPaths{ExtensionID: "khljlamhjdojjgoaeildaambelafkkei"}
+	fakeShipyardSockets(t, func() []connectedProfileInfo {
+		return []connectedProfileInfo{{SocketPath: sock, ExtensionID: p.ExtensionID, Directory: shipyardProfile}}
+	})
+	err = reloadShipyardExtension(p, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "click reload") {
+		t.Fatalf("unexpected: %v", err)
 	}
 }
