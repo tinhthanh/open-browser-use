@@ -107,6 +107,7 @@ func newRootCommand() *cobra.Command {
 		newSetFileChooserFilesCommand(),
 		newSimpleRPCCommand("turn-ended", "turnEnded", "End the current browser turn"),
 		newProfilesCommand(),
+		newShipyardCommand(),
 		newVersionCommand(),
 	)
 	return root

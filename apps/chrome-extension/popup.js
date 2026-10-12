@@ -52,7 +52,7 @@ function renderStatus(status) {
   statusPill.dataset.state = state;
   statusLabel.textContent = detail.label;
   statusMessage.textContent = detail.message;
-  hostName.textContent = status?.hostName ?? "com.ifuryst.open_browser_use.extension";
+  hostName.textContent = status?.hostName ?? "com.tinhthanh.open_browser_use.extension";
   lastChecked.textContent = formatLastChecked(status?.lastChecked);
 
   const error = typeof status?.error === "string" ? status.error.trim() : "";
