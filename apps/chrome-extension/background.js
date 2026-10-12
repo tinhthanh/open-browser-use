@@ -323,6 +323,13 @@ class BrowserBackend {
     return "pong";
   }
 
+  // Shipyard's setup asks for this after writing a newer copy of the
+  // extension: reloading makes Chrome load it (and restart this worker).
+  reloadExtension() {
+    setTimeout(() => chrome.runtime.reload(), 200);
+    return { reloading: true };
+  }
+
   async getInfo() {
     let { extensionInstanceId } = await chrome.storage.local.get("extensionInstanceId");
     if (typeof extensionInstanceId !== "string") {
@@ -333,6 +340,9 @@ class BrowserBackend {
     return {
       name: "Open Browser Use Chrome",
       version: chrome.runtime.getManifest().version,
+      // Read from the manifest Chrome loaded, so it names the running code
+      // even after newer files were written to the extension's folder.
+      versionName: chrome.runtime.getManifest().version_name ?? "",
       type: "extension",
       capabilities: {
         tab: webMcpEnabled ? [WEBMCP_CAPABILITY] : []

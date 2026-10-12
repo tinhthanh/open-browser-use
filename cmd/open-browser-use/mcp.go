@@ -22,6 +22,9 @@ const mcpProtocolVersion = "2025-06-18"
 type mcpServer struct {
 	options socketOptions
 	runner  *actionRunner
+	// extensionChecked: as Shipyard's chrome plugin, the server made sure
+	// Chrome runs the extension this binary ships (see ensureShippedExtension).
+	extensionChecked bool
 }
 
 type mcpTool struct {
@@ -520,6 +523,9 @@ func (server *mcpServer) callTool(params json.RawMessage) (map[string]any, error
 	if err := server.checkPinned(); err != nil {
 		return mcpToolErrorResult(err.Error()), nil
 	}
+	if err := server.ensureShippedExtension(); err != nil {
+		return mcpToolErrorResult(err.Error()), nil
+	}
 	output, err := server.runTool(request.Name, request.Arguments)
 	if err != nil {
 		return mcpToolErrorResult(err.Error()), nil
@@ -622,6 +628,27 @@ func (server *mcpServer) checkPinned() error {
 	if connected := probeConnectedProfiles(o.socketDir); len(connected) > 1 {
 		return ambiguousBrowserError(connected)
 	}
+	return nil
+}
+
+// ensureShippedExtension runs once per server when it is Shipyard's chrome
+// plugin ($BERTH_PLUGIN_DIR): after a plugin update Chrome may still run the
+// old extension, so reload it before the agent's first call.
+func (server *mcpServer) ensureShippedExtension() error {
+	if server.extensionChecked || os.Getenv("BERTH_PLUGIN_DIR") == "" {
+		return nil
+	}
+	p, err := resolveShipyardPaths("")
+	if err != nil {
+		return err
+	}
+	if ok, why := extensionIntact(p.ExtensionDir); !ok {
+		return fmt.Errorf("the chrome plugin is not set up for this version (%s): finish its setup in Shipyard → Settings → Plugins", why)
+	}
+	if err := reloadShipyardExtension(p, 15*time.Second); err != nil {
+		return err
+	}
+	server.extensionChecked = true
 	return nil
 }
 

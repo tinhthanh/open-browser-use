@@ -2488,6 +2488,7 @@ type connectedProfileInfo struct {
 	Directory       string `json:"directory,omitempty"`
 	DisplayName     string `json:"displayName,omitempty"`
 	Target          string `json:"target,omitempty"`
+	VersionName     string `json:"versionName,omitempty"`
 }
 
 func (info connectedProfileInfo) label() string {
@@ -2544,6 +2545,9 @@ func connectedProfileFromInfo(socketPath string, payload map[string]any) connect
 	}
 	if instanceID, ok := metadata["extensionInstanceId"].(string); ok {
 		info.InstanceID = instanceID
+	}
+	if versionName, ok := result["versionName"].(string); ok {
+		info.VersionName = versionName
 	}
 	if browserID, browserName, browserInstance, dir, name, ok := resolveProfileForInstanceID(info.ExtensionID, info.InstanceID); ok {
 		info.Browser = browserID
