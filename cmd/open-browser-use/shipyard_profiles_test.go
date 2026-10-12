@@ -102,7 +102,7 @@ func TestStatusNeedsTheExtensionInEveryAllowedProfile(t *testing.T) {
 		t.Fatalf("Personal is allowed but lacks the extension: %+v", st)
 	}
 	installInProfile(t, p, "Default", map[string]any{"state": 0})
-	if st := checkShipyard(p); st.Ready || !strings.Contains(st.Problem, "turn on Open Browser Use") {
+	if st := checkShipyard(p); st.Ready || !strings.Contains(st.Problem, "turn on VetGo Browser Agent") {
 		t.Fatalf("Personal has it turned off in Chrome: %+v", st)
 	}
 	installInProfile(t, p, "Default", map[string]any{"state": 1})
