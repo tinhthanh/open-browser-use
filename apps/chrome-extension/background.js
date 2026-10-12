@@ -1,4 +1,4 @@
-const NATIVE_HOST_NAME = "com.ifuryst.open_browser_use.extension";
+const NATIVE_HOST_NAME = "com.tinhthanh.open_browser_use.extension";
 const NATIVE_HOST_STATUS_KEY = "OPEN_BROWSER_USE_NATIVE_HOST_STATUS";
 const SESSION_STATE_KEY = "OPEN_BROWSER_USE_SESSION_STATE";
 const WEBMCP_ENABLED_KEY = "OPEN_BROWSER_USE_WEBMCP_ENABLED";

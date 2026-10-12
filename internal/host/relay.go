@@ -20,7 +20,9 @@ import (
 	"github.com/ifuryst/open-browser-use/internal/wire"
 )
 
-const NativeHostName = "com.ifuryst.open_browser_use.extension"
+// The fork has its own native host name and socket folder, so it never
+// takes over (or talks to) an upstream Open Browser Use install.
+const NativeHostName = "com.tinhthanh.open_browser_use.extension"
 
 var DefaultSocketDir = defaultSocketDir()
 
@@ -306,9 +308,9 @@ func socketDir(configured string) string {
 
 func defaultSocketDir() string {
 	if runtime.GOOS == "windows" {
-		return filepath.Join(os.TempDir(), "open-browser-use")
+		return filepath.Join(os.TempDir(), "tinhthanh-open-browser-use")
 	}
-	return "/tmp/open-browser-use"
+	return "/tmp/tinhthanh-open-browser-use"
 }
 
 func ActiveSocketRecordPath(configuredDir string) string {

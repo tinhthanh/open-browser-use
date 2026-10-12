@@ -474,6 +474,9 @@ func (server *mcpServer) callTool(params json.RawMessage) (map[string]any, error
 	if request.Arguments == nil {
 		request.Arguments = map[string]any{}
 	}
+	if err := server.checkPinned(); err != nil {
+		return mcpToolErrorResult(err.Error()), nil
+	}
 	output, err := server.runTool(request.Name, request.Arguments)
 	if err != nil {
 		return mcpToolErrorResult(err.Error()), nil
@@ -562,6 +565,21 @@ func (server *mcpServer) runTool(name string, arguments map[string]any) (any, er
 func (server *mcpServer) invoke(method string, params map[string]any) (map[string]any, error) {
 	response, _, err := server.runner.invoke(method, params)
 	return response, err
+}
+
+// checkPinned refuses to guess a browser for an agent: when the server was
+// started with no --socket, --browser or --profile and more than one
+// extension is connected, "the active one" may be any of them (a banking
+// profile included).
+func (server *mcpServer) checkPinned() error {
+	o := server.runner.options
+	if o.socketPath != "" || strings.TrimSpace(o.browser) != "" || strings.TrimSpace(o.profile) != "" {
+		return nil
+	}
+	if connected := probeConnectedProfiles(o.socketDir); len(connected) > 1 {
+		return ambiguousBrowserError(connected)
+	}
+	return nil
 }
 
 func (server *mcpServer) runHistoryTool(arguments map[string]any) (any, error) {

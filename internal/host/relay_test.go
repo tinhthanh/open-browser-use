@@ -198,7 +198,7 @@ func TestDefaultSocketDirUsesShortUnixPath(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows keeps the socket directory under the user temp directory")
 	}
-	if DefaultSocketDir != "/tmp/open-browser-use" {
+	if DefaultSocketDir != "/tmp/tinhthanh-open-browser-use" {
 		t.Fatalf("expected short default socket dir, got %q", DefaultSocketDir)
 	}
 	relay := NewRelay(Config{}, nil, nil)
