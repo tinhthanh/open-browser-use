@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,13 +54,54 @@ The server exposes browser tools over newline-delimited JSON-RPC on stdin/stdout
 It is intended for agent runtimes that can launch local MCP servers, for example
 with the command "obu mcp".`,
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !cmd.Flags().Changed("session-id") {
+				options.sessionID = mcpSessionID(os.Getenv("BERTH_SESSION"), randomSessionSuffix)
+			}
 			server := newMCPServer(options)
 			return server.serve(os.Stdin, os.Stdout)
 		},
 	}
 	addSocketFlags(cmd, &options)
 	return cmd
+}
+
+// mcpSessionID gives each agent its own browser session, so agents running
+// side by side get their own tab group and finalize_tabs only closes their
+// own tabs (the extension keys tabs by session). Under Shipyard it follows
+// the agent's session ($BERTH_SESSION), so it survives the MCP server being
+// restarted; otherwise it is unique to this server process.
+func mcpSessionID(berthSession string, random func() string) string {
+	if name := sessionIDSafe(berthSession); name != "" {
+		return "berth-" + name
+	}
+	return defaultMCPSessionID + "-" + random()
+}
+
+// sessionIDSafe keeps a session name to letters, digits and ._-, at most 64
+// characters, for use as a session id.
+func sessionIDSafe(name string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(name) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+		if b.Len() >= 64 {
+			break
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+func randomSessionSuffix() string {
+	var buf [4]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(buf[:])
 }
 
 func newMCPServer(options socketOptions) *mcpServer {
