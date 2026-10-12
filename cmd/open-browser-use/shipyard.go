@@ -40,6 +40,8 @@ type shipyardPaths struct {
 	Binary       string
 	Manifest     string
 	ProfileDir   string
+	// ChromeRoot is Chrome's user data folder, holding every profile.
+	ChromeRoot string
 }
 
 func resolveShipyardPaths(pluginDir string) (shipyardPaths, error) {
@@ -69,6 +71,7 @@ func resolveShipyardPaths(pluginDir string) (shipyardPaths, error) {
 	}
 	ext := filepath.Join(pluginDir, "extension")
 	return shipyardPaths{
+		ChromeRoot:   root.Root,
 		PluginDir:    pluginDir,
 		ExtensionDir: ext,
 		ExtensionID:  unpackedExtensionIDForPath(ext),
@@ -215,6 +218,7 @@ func writeShipyardNativeManifest(p shipyardPaths) error {
 	if err != nil {
 		return err
 	}
+	manifest["allowed_origins"] = shipyardOrigins(p)
 	payload, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return err
@@ -223,6 +227,24 @@ func writeShipyardNativeManifest(p shipyardPaths) error {
 		return err
 	}
 	return os.WriteFile(p.Manifest, append(payload, '\n'), 0o600)
+}
+
+func shipyardOrigins(p shipyardPaths) []string {
+	var out []string
+	for _, id := range p.shipyardExtensionIDs() {
+		out = append(out, "chrome-extension://"+id+"/")
+	}
+	return out
+}
+
+// writeWebStoreExternalExtension asks Chrome to add the Web Store copy to
+// every profile: Chrome adds it turned off and lets the person turn it on.
+func writeWebStoreExternalExtension(p shipyardPaths) error {
+	if shipyardWebStoreExtensionID == "" {
+		return nil
+	}
+	_, err := installChromeExternalExtensionForBrowser(shipyardWebStoreExtensionID, filepath.Join(p.ChromeRoot, "External Extensions", shipyardWebStoreExtensionID+".json"), "chrome")
+	return err
 }
 
 type shipyardStatus struct {
@@ -239,9 +261,14 @@ type shipyardStatus struct {
 	ProfileName      string `json:"profileName"`
 	ExtensionID      string `json:"extensionId"`
 	ExtensionDir     string `json:"extensionDir"`
-	Problem          string `json:"problem,omitempty"`
+	// Profiles are the Chrome profiles agents may use (Shipyard's settings).
+	Profiles []agentProfile `json:"profiles"`
+	Problem  string         `json:"problem,omitempty"`
 }
 
+// checkShipyard reports whether every profile agents may use is set up:
+// the extension intact, the native host registered, the extension added to
+// each allowed profile, and Chrome running the shipped copy where it is open.
 func checkShipyard(p shipyardPaths) shipyardStatus {
 	st := shipyardStatus{ProfileName: shipyardProfile, ExtensionID: p.ExtensionID, ExtensionDir: p.ExtensionDir}
 	if b, err := os.ReadFile(p.Manifest); err == nil {
@@ -249,33 +276,51 @@ func checkShipyard(p shipyardPaths) shipyardStatus {
 			Path           string   `json:"path"`
 			AllowedOrigins []string `json:"allowed_origins"`
 		}
-		if json.Unmarshal(b, &m) == nil && m.Path == p.Binary && len(m.AllowedOrigins) == 1 && m.AllowedOrigins[0] == "chrome-extension://"+p.ExtensionID+"/" {
+		if json.Unmarshal(b, &m) == nil && m.Path == p.Binary && strings.Join(m.AllowedOrigins, " ") == strings.Join(shipyardOrigins(p), " ") {
 			st.NativeHost = true
 		}
 	}
 	if info, err := os.Stat(p.ProfileDir); err == nil && info.IsDir() {
 		st.Profile = true
 	}
-	if d, ok := detectUnpackedExtensionInProfile(p.ProfileDir, p.ExtensionID); ok && d.Version != "" {
-		st.ExtensionInstalled = true
+	st.Profiles = allowedAgentProfiles(p)
+	var missing, off *agentProfile
+	for i := range st.Profiles {
+		ap := &st.Profiles[i]
+		if !ap.Installed && missing == nil {
+			missing = ap
+		}
+		if ap.Installed && ap.Off && off == nil {
+			off = ap
+		}
 	}
+	st.ExtensionInstalled = len(st.Profiles) > 0 && missing == nil
 	var why string
 	st.ExtensionIntact, why = extensionIntact(p.ExtensionDir)
-	if c, ok := connectedShipyardExtension(p); ok {
-		st.Connected = true
-		st.RunningVersion = c.VersionName
-		st.ExtensionCurrent = c.VersionName == shippedVersionName()
+	connected := connectedShipyardExtensions(p)
+	st.Connected = len(connected) > 0
+	st.ExtensionCurrent = st.Connected
+	for _, c := range connected {
+		if c.VersionName != shippedVersionName() {
+			st.ExtensionCurrent, st.RunningVersion = false, c.VersionName
+		} else if st.RunningVersion == "" {
+			st.RunningVersion = c.VersionName
+		}
 	}
-	st.Ready = st.NativeHost && st.ExtensionInstalled && st.ExtensionIntact && (!st.Connected || st.ExtensionCurrent)
+	st.Ready = st.NativeHost && st.ExtensionInstalled && st.ExtensionIntact && off == nil && (!st.Connected || st.ExtensionCurrent)
 	switch {
 	case !st.ExtensionIntact:
 		st.Problem = "the extension folder is not the one this plugin ships (" + why + "); run setup again"
 	case !st.NativeHost:
 		st.Problem = "the native host is not registered for this extension; run setup again"
-	case !st.Profile:
+	case len(st.Profiles) == 0:
+		st.Problem = "no Chrome profile is turned on for agents (Settings → Plugins → Chrome)"
+	case missing != nil && missing.Dir == shipyardProfile && !st.Profile:
 		st.Problem = "Chrome has no \"" + shipyardProfile + "\" profile yet"
-	case !st.ExtensionInstalled:
-		st.Problem = "load the extension in the \"" + shipyardProfile + "\" profile (chrome://extensions, Developer mode, Load unpacked)"
+	case missing != nil:
+		st.Problem = "load the extension in the \"" + missing.Name + "\" profile (chrome://extensions, Developer mode, Load unpacked)"
+	case off != nil:
+		st.Problem = "turn on Open Browser Use in chrome://extensions of the \"" + off.Name + "\" profile"
 	case st.Connected && !st.ExtensionCurrent:
 		st.Problem = "Chrome still runs an older copy of the extension; run setup again to reload it"
 	}
@@ -285,43 +330,78 @@ func checkShipyard(p shipyardPaths) shipyardStatus {
 // probeShipyardSockets lists the connected extensions (a variable for tests).
 var probeShipyardSockets = func() []connectedProfileInfo { return probeConnectedProfiles(host.DefaultSocketDir) }
 
-func connectedShipyardExtension(p shipyardPaths) (connectedProfileInfo, bool) {
+// connectedShipyardExtensions are the plugin's extensions connected in the
+// profiles agents may use.
+func connectedShipyardExtensions(p shipyardPaths) []connectedProfileInfo {
+	allowed := map[string]bool{}
+	for _, ap := range allowedAgentProfiles(p) {
+		allowed[ap.Dir] = true
+	}
+	var out []connectedProfileInfo
 	for _, c := range probeShipyardSockets() {
-		if c.ExtensionID == p.ExtensionID && c.Directory == shipyardProfile {
-			return c, true
+		if p.isShipyardExtensionID(c.ExtensionID) && allowed[c.Directory] {
+			out = append(out, c)
 		}
 	}
-	return connectedProfileInfo{}, false
+	return out
 }
 
 // reloadShipyardExtension makes Chrome load the extension this binary ships
-// when the "Shipyard Agent" profile still runs an older copy, and waits until
-// the new one connects. With Chrome closed there is nothing to do: Chrome
-// loads the files on disk when it starts.
+// in each allowed profile that still runs an older unpacked copy, and waits
+// until the new ones connect. With Chrome closed there is nothing to do:
+// Chrome loads the files on disk when it starts. A Web Store copy updates
+// through the store instead.
 func reloadShipyardExtension(p shipyardPaths, wait time.Duration) error {
-	c, ok := connectedShipyardExtension(p)
-	if !ok || c.VersionName == shippedVersionName() {
+	var stale []connectedProfileInfo
+	for _, c := range connectedShipyardExtensions(p) {
+		if c.VersionName == shippedVersionName() {
+			continue
+		}
+		if c.ExtensionID != p.ExtensionID {
+			return fmt.Errorf("the %q profile runs a Web Store copy of the extension (%q) that is not the one this plugin ships; update the plugin or wait for Chrome to update the extension", profileLabel(c), c.VersionName)
+		}
+		stale = append(stale, c)
+	}
+	if len(stale) == 0 {
 		return nil
 	}
-	response, err := invokeWithProfile(c.SocketPath, "", "", "", "reloadExtension", map[string]any{}, 5*time.Second)
-	if err == nil {
-		err = responseError("reloadExtension", response)
-	}
-	if err != nil {
-		return fmt.Errorf("Chrome runs an older copy of the extension that cannot reload itself: in the %q profile open chrome://extensions and click reload on Open Browser Use (%v)", shipyardProfile, err)
+	for _, c := range stale {
+		response, err := invokeWithProfile(c.SocketPath, "", "", "", "reloadExtension", map[string]any{}, 5*time.Second)
+		if err == nil {
+			err = responseError("reloadExtension", response)
+		}
+		if err != nil {
+			return fmt.Errorf("Chrome runs an older copy of the extension that cannot reload itself: in the %q profile open chrome://extensions and click reload on Open Browser Use (%v)", profileLabel(c), err)
+		}
 	}
 	for deadline := time.Now().Add(wait); time.Now().Before(deadline); {
 		time.Sleep(500 * time.Millisecond)
-		if c, ok := connectedShipyardExtension(p); ok && c.VersionName == shippedVersionName() {
+		current := map[string]bool{}
+		for _, c := range connectedShipyardExtensions(p) {
+			current[c.Directory] = c.VersionName == shippedVersionName()
+		}
+		done := true
+		for _, c := range stale {
+			done = done && current[c.Directory]
+		}
+		if done {
 			return nil
 		}
 	}
-	return fmt.Errorf("the extension did not reconnect within %s after reloading; check Open Browser Use in chrome://extensions of the %q profile", wait, shipyardProfile)
+	return fmt.Errorf("the extension did not reconnect within %s after reloading; check Open Browser Use in chrome://extensions of the %q profile", wait, profileLabel(stale[0]))
 }
 
-func openShipyardGuide(p shipyardPaths) error {
+func profileLabel(c connectedProfileInfo) string {
+	if c.DisplayName != "" {
+		return c.DisplayName
+	}
+	return c.Directory
+}
+
+// openShipyardGuide opens a profile with the guide and chrome://extensions.
+func openShipyardGuide(p shipyardPaths, ap agentProfile) error {
 	guide := filepath.Join(p.PluginDir, "setup.html")
-	if err := os.WriteFile(guide, []byte(shipyardGuideHTML(p)), 0o644); err != nil {
+	if err := os.WriteFile(guide, []byte(shipyardGuideHTML(p, ap.Name)), 0o644); err != nil {
 		return err
 	}
 	guideURL := "file://" + guide
@@ -329,9 +409,9 @@ func openShipyardGuide(p shipyardPaths) error {
 	switch runtime.GOOS {
 	case "darwin":
 		// --profile-directory creates the profile when it does not exist yet.
-		chrome = exec.Command("open", "-na", "Google Chrome", "--args", "--profile-directory="+shipyardProfile, guideURL, "chrome://extensions/")
+		chrome = exec.Command("open", "-na", "Google Chrome", "--args", "--profile-directory="+ap.Dir, guideURL, "chrome://extensions/")
 	case "linux":
-		chrome = exec.Command("google-chrome", "--profile-directory="+shipyardProfile, guideURL, "chrome://extensions/")
+		chrome = exec.Command("google-chrome", "--profile-directory="+ap.Dir, guideURL, "chrome://extensions/")
 	default:
 		return fmt.Errorf("opening Chrome is not implemented for %s", runtime.GOOS)
 	}
@@ -342,7 +422,7 @@ func openShipyardGuide(p shipyardPaths) error {
 	return revealFile(filepath.Join(p.ExtensionDir, "manifest.json"))
 }
 
-func shipyardGuideHTML(p shipyardPaths) string {
+func shipyardGuideHTML(p shipyardPaths, profileName string) string {
 	esc := func(s string) string {
 		r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;")
 		return r.Replace(s)
@@ -351,7 +431,7 @@ func shipyardGuideHTML(p shipyardPaths) string {
 <style>body{font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;color:#222}
 code{background:#f2f2f2;padding:2px 6px;border-radius:4px;font-size:13px;word-break:break-all}li{margin:10px 0}.note{color:#666;font-size:13px}</style></head>
 <body><h1>Set up the agent's browser</h1>
-<p>This window is Chrome's <b>` + esc(shipyardProfile) + `</b> profile. Agents use only this profile, never your other ones, so sign in here only to sites you want agents to use.</p>
+<p>This window is Chrome's <b>` + esc(profileName) + `</b> profile. Agents use only the profiles you turned on in Shipyard → Settings → Plugins → Chrome, so here they can use every site you are signed in to.</p>
 <ol>
 <li>Open the <b>chrome://extensions</b> tab next to this one.</li>
 <li>Turn on <b>Developer mode</b> (top right).</li>
@@ -360,7 +440,7 @@ code{background:#f2f2f2;padding:2px 6px;border-radius:4px;font-size:13px;word-br
 </ol>
 <p>That's all: Shipyard → Settings → Plugins shows the plugin as set up within a few seconds.</p>
 <p><b>Loaded it before?</b> Then only click the reload button (⟳) on <b>Open Browser Use</b> in chrome://extensions, so Chrome runs the updated copy. Later updates reload it by themselves.</p>
-<p class="note">Do not load this extension in other profiles. If Chrome later asks to disable developer-mode extensions, keep it on for this profile.</p>
+<p class="note">Load it only in profiles you turned on for agents. If Chrome later asks to disable developer-mode extensions, keep it on for this profile.</p>
 </body></html>
 `
 }
@@ -386,17 +466,27 @@ func newShipyardCommand() *cobra.Command {
 			if err := writeShipyardNativeManifest(p); err != nil {
 				return fmt.Errorf("registering the native host: %w", err)
 			}
-			reloadErr := reloadShipyardExtension(p, 15*time.Second)
-			st := checkShipyard(p)
-			if !st.ExtensionInstalled || reloadErr != nil {
-				if err := openShipyardGuide(p); err != nil {
-					return err
-				}
+			if err := writeWebStoreExternalExtension(p); err != nil {
+				return fmt.Errorf("asking Chrome to add the extension: %w", err)
 			}
+			reloadErr := reloadShipyardExtension(p, 15*time.Second)
 			if reloadErr != nil {
 				fmt.Fprintln(cmd.ErrOrStderr(), reloadErr)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Extension %s in %s\nNative host %s\nProfile %q\n", p.ExtensionID, p.ExtensionDir, p.Manifest, shipyardProfile)
+			// Open the steps in each allowed profile that lacks the
+			// extension (and in the agents' own profile when only its copy
+			// could not reload itself).
+			opened := 0
+			for _, ap := range checkShipyard(p).Profiles {
+				if ap.Installed && !(reloadErr != nil && ap.Dir == shipyardProfile) {
+					continue
+				}
+				if err := openShipyardGuide(p, ap); err != nil {
+					return err
+				}
+				opened++
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Extension %s in %s\nNative host %s\nOpened the steps in %d profile(s)\n", p.ExtensionID, p.ExtensionDir, p.Manifest, opened)
 			return nil
 		},
 	}
@@ -422,8 +512,41 @@ func newShipyardCommand() *cobra.Command {
 		},
 	}
 	status.Flags().BoolVar(&asJSON, "json", false, "print JSON")
+	settings := &cobra.Command{
+		Use:   "settings",
+		Short: "List the plugin's settings for Shipyard: which Chrome profiles agents may use",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			p, err := resolveShipyardPaths(pluginDir)
+			if err != nil {
+				return err
+			}
+			list := shipyardSettingsList(p)
+			if asJSON {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"settings": list})
+			}
+			for _, s := range list {
+				fmt.Fprintf(cmd.OutOrStdout(), "%-5v %s  %s\n", s.Value, s.Label, s.Description)
+			}
+			return nil
+		},
+	}
+	settings.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	cmd.PersistentFlags().StringVar(&pluginDir, "plugin-dir", "", "the plugin's folder (default $BERTH_PLUGIN_DIR)")
-	cmd.AddCommand(setup, status)
+	writeExtension := &cobra.Command{
+		Use:    "write-extension <dir>",
+		Short:  "Write the extension exactly as the plugin ships it (for a Chrome Web Store upload)",
+		Args:   cobra.ExactArgs(1),
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := writeEmbeddedExtension(args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), shippedVersionName())
+			return nil
+		},
+	}
+	cmd.AddCommand(setup, status, settings, writeExtension)
 	return cmd
 }
 

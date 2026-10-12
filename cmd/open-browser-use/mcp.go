@@ -25,6 +25,10 @@ type mcpServer struct {
 	// extensionChecked: as Shipyard's chrome plugin, the server made sure
 	// Chrome runs the extension this binary ships (see ensureShippedExtension).
 	extensionChecked bool
+	// shipyardProfiles: use only the Chrome profiles Shipyard's settings
+	// allow (--shipyard-profiles); chosenProfile is the one use_profile picked.
+	shipyardProfiles bool
+	chosenProfile    string
 }
 
 type mcpTool struct {
@@ -48,6 +52,7 @@ type mcpError struct {
 
 func newMCPCommand() *cobra.Command {
 	options := socketOptions{sessionID: defaultMCPSessionID}
+	var shipyardProfiles bool
 	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run an MCP stdio server for Open Browser Use",
@@ -62,10 +67,17 @@ with the command "obu mcp".`,
 				options.sessionID = mcpSessionID(os.Getenv("BERTH_SESSION"), randomSessionSuffix)
 			}
 			server := newMCPServer(options)
+			if shipyardProfiles {
+				if options.profile != "" || options.socketPath != "" {
+					return errors.New("--shipyard-profiles picks the profile itself: drop --profile and --socket")
+				}
+				server.shipyardProfiles = true
+			}
 			return server.serve(os.Stdin, os.Stdout)
 		},
 	}
 	addSocketFlags(cmd, &options)
+	cmd.Flags().BoolVar(&shipyardProfiles, "shipyard-profiles", false, "use only the Chrome profiles Shipyard's chrome plugin settings allow ($BERTH_PLUGIN_SETTINGS)")
 	return cmd
 }
 
@@ -183,7 +195,7 @@ func (server *mcpServer) handleMessage(payload []byte) map[string]any {
 	case "ping":
 		return mcpResultResponse(request.ID, map[string]any{})
 	case "tools/list":
-		return mcpResultResponse(request.ID, map[string]any{"tools": mcpTools()})
+		return mcpResultResponse(request.ID, map[string]any{"tools": server.tools()})
 	case "tools/call":
 		result, err := server.callTool(request.Params)
 		if err != nil {
@@ -519,6 +531,21 @@ func (server *mcpServer) callTool(params json.RawMessage) (map[string]any, error
 	}
 	if request.Arguments == nil {
 		request.Arguments = map[string]any{}
+	}
+	if server.shipyardProfiles {
+		switch request.Name {
+		case "profiles":
+			return server.profilesTool()
+		case "use_profile":
+			out, err := server.useProfileTool(request.Arguments)
+			if err != nil {
+				return mcpToolErrorResult(err.Error()), nil
+			}
+			return mcpToolResult(out)
+		}
+		if err := server.selectShipyardProfile(); err != nil {
+			return mcpToolErrorResult(err.Error()), nil
+		}
 	}
 	if err := server.checkPinned(); err != nil {
 		return mcpToolErrorResult(err.Error()), nil
@@ -957,4 +984,122 @@ func requiredStringArrayArg(arguments map[string]any, name string) ([]string, er
 		return nil, fmt.Errorf("%s must contain at least one file", name)
 	}
 	return out, nil
+}
+
+// tools are the MCP tools this server offers.
+func (server *mcpServer) tools() []mcpTool {
+	tools := mcpTools()
+	if server.shipyardProfiles {
+		tools = append(tools,
+			mcpTool{
+				Name:        "profiles",
+				Title:       "List Chrome Profiles",
+				Description: "List the Chrome profiles the user allowed agents to use, which is in use, and whether each is open.",
+				InputSchema: emptyObjectSchema(),
+			},
+			mcpTool{
+				Name:        "use_profile",
+				Title:       "Use Chrome Profile",
+				Description: "Switch to another allowed Chrome profile (by name or folder from `profiles`). Its sign-ins are the user's: use it only for the task the user asked for.",
+				InputSchema: objectSchema(map[string]any{
+					"profile": stringSchema("Profile name or folder, from `profiles`."),
+				}, []string{"profile"}),
+			},
+		)
+	}
+	return tools
+}
+
+// selectShipyardProfile points the server at an allowed profile before a
+// browser call: the one use_profile picked, else "Shipyard Agent", else the
+// only allowed one. It reads the settings every call, so a profile the user
+// turns off stops being used at once.
+func (server *mcpServer) selectShipyardProfile() error {
+	p, err := resolveShipyardPaths("")
+	if err != nil {
+		return err
+	}
+	allowed := allowedAgentProfiles(p)
+	if len(allowed) == 0 {
+		return errors.New("no Chrome profile is turned on for agents: ask the user to turn one on in Shipyard → Settings → Plugins → Chrome")
+	}
+	pick := ""
+	for _, ap := range allowed {
+		if server.chosenProfile != "" && ap.Dir == server.chosenProfile {
+			pick = ap.Dir
+		}
+	}
+	if server.chosenProfile != "" && pick == "" {
+		return fmt.Errorf("the user turned off the Chrome profile %q for agents; call profiles to see the ones you may use", server.chosenProfile)
+	}
+	if pick == "" {
+		for _, ap := range allowed {
+			if ap.Dir == shipyardProfile {
+				pick = ap.Dir
+			}
+		}
+	}
+	if pick == "" && len(allowed) == 1 {
+		pick = allowed[0].Dir
+	}
+	if pick == "" {
+		names := make([]string, 0, len(allowed))
+		for _, ap := range allowed {
+			names = append(names, fmt.Sprintf("%q", ap.Name))
+		}
+		return fmt.Errorf("several Chrome profiles are allowed (%s): call use_profile to pick one", strings.Join(names, ", "))
+	}
+	if selector := profileDirSelectorPrefix + pick; server.runner.options.profile != selector {
+		server.runner.options.profile = selector
+		server.options.profile = selector
+		server.runner.currentTabID = 0
+	}
+	if server.runner.options.browser == "" {
+		server.runner.options.browser = "chrome"
+		server.options.browser = "chrome"
+	}
+	return nil
+}
+
+func (server *mcpServer) useProfileTool(arguments map[string]any) (any, error) {
+	want, err := requiredStringArg(arguments, "profile")
+	if err != nil {
+		return nil, err
+	}
+	p, err := resolveShipyardPaths("")
+	if err != nil {
+		return nil, err
+	}
+	for _, ap := range allowedAgentProfiles(p) {
+		if strings.EqualFold(ap.Dir, want) || strings.EqualFold(ap.Name, want) {
+			server.chosenProfile = ap.Dir
+			if err := server.selectShipyardProfile(); err != nil {
+				return nil, err
+			}
+			return map[string]any{"profile": ap.Name, "dir": ap.Dir}, nil
+		}
+	}
+	return nil, fmt.Errorf("%q is not a Chrome profile the user allowed for agents; call profiles to see them", want)
+}
+
+func (server *mcpServer) profilesTool() (map[string]any, error) {
+	p, err := resolveShipyardPaths("")
+	if err != nil {
+		return mcpToolErrorResult(err.Error()), nil
+	}
+	open := map[string]bool{}
+	for _, c := range connectedShipyardExtensions(p) {
+		open[c.Directory] = true
+	}
+	type row struct {
+		Name  string `json:"name"`
+		Dir   string `json:"dir"`
+		InUse bool   `json:"inUse"`
+		Open  bool   `json:"open"`
+	}
+	rows := []row{}
+	for _, ap := range allowedAgentProfiles(p) {
+		rows = append(rows, row{Name: ap.Name, Dir: ap.Dir, InUse: profileDirSelectorPrefix+ap.Dir == server.runner.options.profile, Open: open[ap.Dir]})
+	}
+	return mcpToolResult(map[string]any{"profiles": rows})
 }

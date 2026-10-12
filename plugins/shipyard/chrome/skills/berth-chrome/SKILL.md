@@ -5,8 +5,13 @@ description: Use real Google Chrome through the berth-chrome MCP server (Shipyar
 
 # Real Chrome with berth-chrome
 
-`berth-chrome` drives Google Chrome on the box, in its **"Shipyard Agent"**
-profile only: never the user's other profiles. Pages there may be signed in.
+`berth-chrome` drives Google Chrome on the box: by default its **"Shipyard
+Agent"** profile, and other profiles only if the user turned them on in
+Shipyard (Settings → Plugins → Chrome). Pages there may be signed in.
+
+- `profiles` lists the profiles you may use; `use_profile {profile}` switches.
+  Stay in "Shipyard Agent" unless the task needs the user's sign-ins in
+  another allowed profile, and say which profile you used.
 
 ## Loop
 
@@ -42,6 +47,6 @@ means the browser refused the submit: fix the listed fields.
   that cost money, or changing account settings.
 - Never type passwords, codes or card numbers unless the user gave them for
   that exact step; if a site needs a login, ask the user to sign in in the
-  "Shipyard Agent" Chrome window themselves.
+  Chrome window of that profile themselves.
 - If tools fail because the extension is not connected, tell the user to
   finish the plugin's setup in Shipyard → Settings → Plugins (Set up…).
