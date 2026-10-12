@@ -968,7 +968,13 @@ func chromeProfileDirs(root string) ([]string, error) {
 			continue
 		}
 		name := entry.Name()
-		if name == "Default" || strings.HasPrefix(name, "Profile ") {
+		if name == "System Profile" || name == "Guest Profile" {
+			continue
+		}
+		// Chrome names profiles "Default" and "Profile N", but one started
+		// with --profile-directory=<name> (like Shipyard's "Shipyard Agent")
+		// keeps that name: any folder holding Preferences is a profile.
+		if name == "Default" || strings.HasPrefix(name, "Profile ") || isFile(filepath.Join(root, name, "Preferences")) {
 			profiles = append(profiles, filepath.Join(root, name))
 		}
 	}
@@ -3457,4 +3463,9 @@ func numberAsInt(value any) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+func isFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }

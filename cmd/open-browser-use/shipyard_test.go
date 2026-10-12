@@ -116,3 +116,25 @@ func TestAmbiguousBrowserErrorNamesTheProfiles(t *testing.T) {
 		t.Fatalf("unexpected message: %v", err)
 	}
 }
+
+func TestChromeProfileDirsIncludesNamedProfiles(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"Default", "Profile 6", "Shipyard Agent", "System Profile", "Guest Profile", "Crashpad"} {
+		os.MkdirAll(filepath.Join(root, dir), 0o700)
+	}
+	for _, dir := range []string{"Shipyard Agent", "System Profile", "Guest Profile"} {
+		os.WriteFile(filepath.Join(root, dir, "Preferences"), []byte("{}"), 0o600)
+	}
+	dirs, err := chromeProfileDirs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, d := range dirs {
+		names = append(names, filepath.Base(d))
+	}
+	got := strings.Join(names, ",")
+	if got != "Default,Profile 6,Shipyard Agent" {
+		t.Fatalf("profiles = %s", got)
+	}
+}
