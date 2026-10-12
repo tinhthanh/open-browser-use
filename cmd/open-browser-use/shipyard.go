@@ -123,6 +123,16 @@ func extensionBuild() string {
 	return hex.EncodeToString(h.Sum(nil))[:12]
 }
 
+// shippedExtensionName is the name Chrome shows for the shipped extension.
+func shippedExtensionName() string {
+	var m struct {
+		Name string `json:"name"`
+	}
+	b, _ := chromeextension.Files.ReadFile("manifest.json")
+	_ = json.Unmarshal(b, &m)
+	return m.Name
+}
+
 // shippedVersionName is the version_name of the extension this binary ships.
 func shippedVersionName() string {
 	var m struct {
@@ -320,7 +330,7 @@ func checkShipyard(p shipyardPaths) shipyardStatus {
 	case missing != nil:
 		st.Problem = "load the extension in the \"" + missing.Name + "\" profile (chrome://extensions, Developer mode, Load unpacked)"
 	case off != nil:
-		st.Problem = "turn on Open Browser Use in chrome://extensions of the \"" + off.Name + "\" profile"
+		st.Problem = "turn on " + shippedExtensionName() + " in chrome://extensions of the \"" + off.Name + "\" profile"
 	case st.Connected && !st.ExtensionCurrent:
 		st.Problem = "Chrome still runs an older copy of the extension; run setup again to reload it"
 	}
@@ -371,7 +381,7 @@ func reloadShipyardExtension(p shipyardPaths, wait time.Duration) error {
 			err = responseError("reloadExtension", response)
 		}
 		if err != nil {
-			return fmt.Errorf("Chrome runs an older copy of the extension that cannot reload itself: in the %q profile open chrome://extensions and click reload on Open Browser Use (%v)", profileLabel(c), err)
+			return fmt.Errorf("Chrome runs an older copy of the extension that cannot reload itself: in the %q profile open chrome://extensions and click reload on %s (%v)", profileLabel(c), shippedExtensionName(), err)
 		}
 	}
 	for deadline := time.Now().Add(wait); time.Now().Before(deadline); {
@@ -388,7 +398,7 @@ func reloadShipyardExtension(p shipyardPaths, wait time.Duration) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("the extension did not reconnect within %s after reloading; check Open Browser Use in chrome://extensions of the %q profile", wait, profileLabel(stale[0]))
+	return fmt.Errorf("the extension did not reconnect within %s after reloading; check %s in chrome://extensions of the %q profile", wait, shippedExtensionName(), profileLabel(stale[0]))
 }
 
 func profileLabel(c connectedProfileInfo) string {
@@ -436,10 +446,10 @@ code{background:#f2f2f2;padding:2px 6px;border-radius:4px;font-size:13px;word-br
 <li>Open the <b>chrome://extensions</b> tab next to this one.</li>
 <li>Turn on <b>Developer mode</b> (top right).</li>
 <li>Click <b>Load unpacked</b> and choose this folder (Finder has it open, selected):<br><code>` + esc(p.ExtensionDir) + `</code></li>
-<li>Check that <b>Open Browser Use</b> shows id <code>` + esc(p.ExtensionID) + `</code>.</li>
+<li>Check that <b>` + esc(shippedExtensionName()) + `</b> shows id <code>` + esc(p.ExtensionID) + `</code>.</li>
 </ol>
 <p>That's all: Shipyard → Settings → Plugins shows the plugin as set up within a few seconds.</p>
-<p><b>Loaded it before?</b> Then only click the reload button (⟳) on <b>Open Browser Use</b> in chrome://extensions, so Chrome runs the updated copy. Later updates reload it by themselves.</p>
+<p><b>Loaded it before?</b> Then only click the reload button (⟳) on <b>` + esc(shippedExtensionName()) + `</b> in chrome://extensions, so Chrome runs the updated copy. Later updates reload it by themselves.</p>
 <p class="note">Load it only in profiles you turned on for agents. If Chrome later asks to disable developer-mode extensions, keep it on for this profile.</p>
 </body></html>
 `

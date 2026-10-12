@@ -23,15 +23,16 @@ add an extension we build ourselves to a profile on macOS or Windows.
 
 ## Steps
 
-1. Pick a listing name of your own. Don't reuse upstream's "Open Browser
-   Use" listing; this fork's extension adds code (the navigation guard, the
-   reload method) that upstream's copy lacks.
+1. The listing is **VetGo Browser Agent** (the manifest's name), not
+   upstream's "Open Browser Use": this fork's extension adds code (the
+   navigation guard, the reload method) that upstream's copy lacks. Every
+   dashboard field is in `VETGO_WEB_STORE_LISTING.md`.
 2. Build the zip from the commit you package the plugin from:
    `scripts/package-shipyard-webstore.sh` → `dist/shipyard-webstore/*.zip`.
 3. Upload it as a new item in the Chrome Web Store developer dashboard
-   (visibility **Unlisted** is enough). Reuse the justifications in
-   `CHROME_WEB_STORE_LISTING.md` for `debugger`, `nativeMessaging` and host
-   permissions, and the policy in `PRIVACY_POLICY.md`.
+   (visibility **Unlisted** is enough), with the texts and images in
+   `VETGO_WEB_STORE_LISTING.md`, including the justifications for `debugger`, `nativeMessaging` and host
+   permissions, and the policy in `VETGO_PRIVACY_POLICY.md`.
 4. After the first upload, copy the item's id into
    `shipyardWebStoreExtensionID` in `cmd/open-browser-use/shipyard_profiles.go`,
    then package and install the plugin again. Setup now writes

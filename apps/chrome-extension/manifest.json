@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Open Browser Use",
-  "description": "Open Browser Use Chrome automation extension.",
+  "name": "VetGo Browser Agent",
+  "description": "Lets your local AI agents (Shipyard) use this Chrome profile, only when you allow it.",
   "version": "1.0.0",
   "icons": {
     "16": "icons/icon-16.png",
@@ -10,7 +10,7 @@
     "128": "icons/icon-128.png"
   },
   "action": {
-    "default_title": "Open Browser Use",
+    "default_title": "VetGo Browser Agent",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",
