@@ -2163,7 +2163,25 @@ func (runner *actionRunner) invoke(method string, params map[string]any) (map[st
 	params["session_id"] = runner.sessionID
 	params["turn_id"] = runner.turnID
 	response, err := invokeWithProfile(runner.options.socketPath, runner.options.socketDir, runner.options.browser, runner.options.profile, method, params, runner.options.timeout)
+	if err == nil {
+		err = responseError(method, response)
+	}
 	return response, runner.currentTabID, err
+}
+
+// responseError turns the extension's JSON-RPC error reply into an error, so a
+// refused or failed step is never reported to the agent as a success.
+func responseError(method string, response map[string]any) error {
+	rpcErr, ok := response["error"]
+	if !ok || rpcErr == nil {
+		return nil
+	}
+	if detail, ok := rpcErr.(map[string]any); ok {
+		if message, ok := detail["message"].(string); ok && message != "" {
+			return fmt.Errorf("%s: %s", method, message)
+		}
+	}
+	return fmt.Errorf("%s failed: %v", method, rpcErr)
 }
 
 type actionLine struct {

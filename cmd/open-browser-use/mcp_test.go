@@ -192,3 +192,16 @@ func TestMCPCommandKeepsAnExplicitSessionIDFlag(t *testing.T) {
 		t.Fatalf("expected a --session-id flag defaulting to %q", defaultMCPSessionID)
 	}
 }
+
+func TestResponseErrorReportsExtensionFailures(t *testing.T) {
+	if err := responseError("executeCdp", map[string]any{"id": "cli-1", "result": map[string]any{}}); err != nil {
+		t.Fatalf("a result is not an error: %v", err)
+	}
+	err := responseError("executeCdp", map[string]any{"id": "cli-1", "error": map[string]any{"code": -32000, "message": "navigating to about: URLs is not allowed"}})
+	if err == nil || err.Error() != "executeCdp: navigating to about: URLs is not allowed" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := responseError("attach", map[string]any{"error": "boom"}); err == nil {
+		t.Fatal("a non-object error must still fail")
+	}
+}
