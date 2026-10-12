@@ -49,11 +49,11 @@ cat > "${plugin_dir}/berth-plugin.json" <<JSON
 {
   "name": "Chrome",
   "version": "${version}",
-  "description": "Lets agents use real Google Chrome in its own \"Shipyard Agent\" profile (open-browser-use ${version}, ${os}-${arch}).",
+  "description": "Lets agents use real Google Chrome: its own \"Shipyard Agent\" profile, and other profiles only if you turn them on (open-browser-use ${version}, ${os}-${arch}).",
   "mcp": {
     "chrome": {
       "command": "bin/open-browser-use",
-      "args": ["mcp", "--browser", "chrome", "--profile", "Shipyard Agent"],
+      "args": ["mcp", "--browser", "chrome", "--shipyard-profiles"],
       "sha256": "${bin_sha}"
     }
   },
@@ -68,7 +68,12 @@ cat > "${plugin_dir}/berth-plugin.json" <<JSON
     "args": ["shipyard", "setup"],
     "status": ["shipyard", "status", "--json"],
     "ready": "ready",
-    "label": "Load the agent's extension in Chrome's \"Shipyard Agent\" profile"
+    "label": "Load the agent's extension in the Chrome profiles agents may use"
+  },
+  "settings": {
+    "server": "chrome",
+    "list": ["shipyard", "settings", "--json"],
+    "label": "Chrome profiles agents may use"
   }
 }
 JSON

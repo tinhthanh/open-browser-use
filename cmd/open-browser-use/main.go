@@ -2580,10 +2580,17 @@ func browserSelectorMatches(selector string, info connectedProfileInfo) bool {
 	return false
 }
 
+const profileDirSelectorPrefix = "dir:"
+
 func profileSelectorMatches(selector string, info connectedProfileInfo) bool {
 	target := strings.TrimSpace(selector)
 	if target == "" {
 		return true
+	}
+	// "dir:<folder>" matches the profile folder only, never a display name,
+	// so a profile someone renamed to look like the allowed one can't match.
+	if folder, ok := strings.CutPrefix(target, profileDirSelectorPrefix); ok {
+		return info.Directory != "" && info.Directory == folder
 	}
 	if info.Directory != "" && strings.EqualFold(target, info.Directory) {
 		return true
