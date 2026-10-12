@@ -584,6 +584,9 @@ class BrowserBackend {
       if (typeof params.method !== "string") {
         throw new Error("executeCdp requires method");
       }
+      if (params.method === "Page.navigate" || params.method === "Target.createTarget") {
+        checkNavigableUrl(params.commandParams?.url);
+      }
       return await chrome.debugger.sendCommand(target, params.method, params.commandParams ?? {});
     });
   }
@@ -1419,6 +1422,28 @@ function optionalPositiveInteger(value, fallback, field) {
     throw new Error(`${field} must be a positive integer`);
   }
   return value;
+}
+
+// Chrome crashes the whole browser (every profile) when the debugger
+// navigates a tab to about:blank#… or to another about:/chrome: page, so
+// agents may only send tabs to web pages or a plain about:blank.
+function checkNavigableUrl(url) {
+  if (typeof url !== "string") {
+    throw new Error("navigation requires a url");
+  }
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`invalid URL ${JSON.stringify(url)}: use a full http(s) URL`);
+  }
+  if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+    return;
+  }
+  if (parsed.protocol === "about:" && parsed.pathname.toLowerCase() === "blank" && !url.includes("#")) {
+    return;
+  }
+  throw new Error(`navigating to ${parsed.protocol} URLs is not allowed: use http(s) or about:blank`);
 }
 
 async function createBackgroundTab() {

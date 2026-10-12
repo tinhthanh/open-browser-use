@@ -161,3 +161,47 @@ func decodeMCPResponses(t *testing.T, payload []byte) []map[string]any {
 	}
 	return responses
 }
+
+func TestMCPSessionIDPerAgent(t *testing.T) {
+	random := func() string { return "a1b2c3d4" }
+	cases := map[string]string{
+		"":                         "obu-mcp-a1b2c3d4",
+		"   ":                      "obu-mcp-a1b2c3d4",
+		"mac/app/fix-login/claude": "berth-mac-app-fix-login-claude",
+		"acme.web_2":               "berth-acme.web_2",
+		"/weird name/":             "berth-weird-name",
+	}
+	for in, want := range cases {
+		if got := mcpSessionID(in, random); got != want {
+			t.Errorf("mcpSessionID(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if long := mcpSessionID(strings.Repeat("x", 200), random); len(long) > len("berth-")+64 {
+		t.Errorf("session id not capped: %d chars", len(long))
+	}
+	if a, b := mcpSessionID("", randomSessionSuffix), mcpSessionID("", randomSessionSuffix); a == b {
+		t.Errorf("two servers without BERTH_SESSION got the same session %q", a)
+	}
+}
+
+func TestMCPCommandKeepsAnExplicitSessionIDFlag(t *testing.T) {
+	t.Setenv("BERTH_SESSION", "mac/app/wt/claude")
+	cmd := newMCPCommand()
+	flag := cmd.Flags().Lookup("session-id")
+	if flag == nil || flag.DefValue != defaultMCPSessionID {
+		t.Fatalf("expected a --session-id flag defaulting to %q", defaultMCPSessionID)
+	}
+}
+
+func TestResponseErrorReportsExtensionFailures(t *testing.T) {
+	if err := responseError("executeCdp", map[string]any{"id": "cli-1", "result": map[string]any{}}); err != nil {
+		t.Fatalf("a result is not an error: %v", err)
+	}
+	err := responseError("executeCdp", map[string]any{"id": "cli-1", "error": map[string]any{"code": -32000, "message": "navigating to about: URLs is not allowed"}})
+	if err == nil || err.Error() != "executeCdp: navigating to about: URLs is not allowed" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := responseError("attach", map[string]any{"error": "boom"}); err == nil {
+		t.Fatal("a non-object error must still fail")
+	}
+}
