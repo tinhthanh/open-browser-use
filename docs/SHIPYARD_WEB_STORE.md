@@ -40,3 +40,12 @@ add an extension we build ourselves to a profile on macOS or Windows.
    both the unpacked and the Web Store copy.
 5. For each later plugin release, upload the zip built from the same
    commit.
+
+## The published copy
+
+- Item: **VetGo Browser Agent**, id `ddmmamiebfmnmfbjbkeeochchmbiimgn`,
+  unlisted: <https://chromewebstore.google.com/detail/ddmmamiebfmnmfbjbkeeochchmbiimgn>
+- First version approved: `1.0.0 build df2197a7182c`.
+- A plugin build whose `version_name` differs from the live store version
+  can't use the store copy until Google approves the matching upload, so
+  upload the new zip before releasing a plugin that changes the extension.
