@@ -20,7 +20,7 @@ import (
 // it is published there. Then setup also asks Chrome to add it to every
 // profile (turned off until the person turns it on in that profile), and
 // the native host accepts that copy too. Empty: unpacked copies only.
-var shipyardWebStoreExtensionID = ""
+var shipyardWebStoreExtensionID = "ddmmamiebfmnmfbjbkeeochchmbiimgn"
 
 func profileSettingKey(dir string) string { return "profile:" + dir }
 
