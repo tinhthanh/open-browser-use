@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ifuryst/open-browser-use/internal/host"
@@ -29,6 +32,12 @@ type mcpServer struct {
 	// allow (--shipyard-profiles); chosenProfile is the one use_profile picked.
 	shipyardProfiles bool
 	chosenProfile    string
+	// attached: a tool may have left the debugger attached to a tab since
+	// the last finalize_tabs or turn_ended. Chrome shows "started debugging
+	// this browser" on every tab while one is, so the server ends the turn
+	// itself when it exits (see endTurn).
+	attached bool
+	ended    sync.Once
 }
 
 type mcpTool struct {
@@ -73,6 +82,15 @@ with the command "obu mcp".`,
 				}
 				server.shipyardProfiles = true
 			}
+			// An agent runtime that stops the server sends a signal rather
+			// than closing stdin first: end the turn then too.
+			signals := make(chan os.Signal, 1)
+			signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+			go func() {
+				<-signals
+				server.endTurn()
+				os.Exit(0)
+			}()
 			return server.serve(os.Stdin, os.Stdout)
 		},
 	}
@@ -154,7 +172,31 @@ func (server *mcpServer) serve(reader io.Reader, writer io.Writer) error {
 			}
 		}
 	}
-	return scanner.Err()
+	err := scanner.Err()
+	server.endTurn()
+	return err
+}
+
+// endTurn detaches the debugger from this session's tabs, once, when the
+// agent is done with the server (its stdin closed, or it was told to stop)
+// without having called finalize_tabs or turn_ended. Tabs stay open; only
+// the debugger is let go. Best effort: the browser may be gone already.
+func (server *mcpServer) endTurn() {
+	server.ended.Do(func() {
+		if !server.attached {
+			return
+		}
+		_, _ = server.invoke("turnEnded", map[string]any{})
+	})
+}
+
+// leavesAttached says whether a tool may attach the debugger to a tab.
+func leavesAttached(tool string) bool {
+	switch tool {
+	case "ping", "info", "tabs", "user_tabs", "history", "name_session", "profiles", "use_profile", "finalize_tabs", "turn_ended":
+		return false
+	}
+	return true
 }
 
 func (server *mcpServer) handleLine(payload []byte) []map[string]any {
@@ -553,7 +595,13 @@ func (server *mcpServer) callTool(params json.RawMessage) (map[string]any, error
 	if err := server.ensureShippedExtension(); err != nil {
 		return mcpToolErrorResult(err.Error()), nil
 	}
+	if leavesAttached(request.Name) {
+		server.attached = true
+	}
 	output, err := server.runTool(request.Name, request.Arguments)
+	if err == nil && (request.Name == "finalize_tabs" || request.Name == "turn_ended") {
+		server.attached = false
+	}
 	if err != nil {
 		return mcpToolErrorResult(err.Error()), nil
 	}

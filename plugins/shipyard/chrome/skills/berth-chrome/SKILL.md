@@ -27,6 +27,14 @@ Shipyard (Settings → Plugins → Chrome). Pages there may be signed in.
 4. Every `act`/`scroll` returns the new snapshot (after navigation too).
    **Read it** before the next step; refs from an older snapshot may be gone.
 
+## Finish
+
+When the browser part of the task is done, even a quick check, call
+`finalize_tabs` (with `keep: [{tabId, status: "handoff"}]` only for a tab the
+user should carry on in), then `turn_ended`. They close your tabs and let go
+of the debugger; until then Chrome shows "started debugging this browser" on
+every tab of that profile.
+
 ## Verify, don't assume
 
 Say a step worked only when the returned snapshot shows it: the confirmation
