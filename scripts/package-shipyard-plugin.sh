@@ -102,7 +102,13 @@ cat > "${plugin_dir}/berth-plugin.json" <<JSON
 JSON
 
 archive="${out_dir}/chrome-${version}-${os}-${arch}.tar.gz"
-tar -C "${out_dir}" -czf "${archive}" chrome
+# A Mac's tar would add "._name" files for extended attributes: not the
+# plugin's, and inside an app bundle they'd break its signature.
+COPYFILE_DISABLE=1 tar -C "${out_dir}" -czf "${archive}" chrome
+if tar -tzf "${archive}" | grep -qE '(^|/)\._'; then
+  echo "${archive} holds Mac metadata (._ files); not publishing it" >&2
+  exit 1
+fi
 (cd "${out_dir}" && shasum -a 256 "$(basename "${archive}")" > "$(basename "${archive}").sha256")
 echo "Plugin folder: ${plugin_dir}"
 echo "Archive:       ${archive}"
