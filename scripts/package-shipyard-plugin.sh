@@ -7,6 +7,7 @@
 #   scripts/package-shipyard-plugin.sh                       # this machine's OS/arch
 #   scripts/package-shipyard-plugin.sh --os linux --arch arm64
 #   scripts/package-shipyard-plugin.sh --arch universal      # macOS, Apple silicon + Intel
+#   scripts/package-shipyard-plugin.sh --version 1.1.0       # name the release (default: git describe)
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,7 +20,8 @@ while [[ $# -gt 0 ]]; do
     --os) os="${2:?--os requires a value}"; shift 2 ;;
     --arch) arch="${2:?--arch requires a value}"; shift 2 ;;
     --out-dir) out_dir="${2:?--out-dir requires a value}"; shift 2 ;;
-    -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+    --version) version_override="${2:?--version requires a value}"; shift 2 ;;
+    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -36,7 +38,7 @@ if [[ "${arch}" == "universal" && "${os}" != "darwin" ]]; then
 fi
 
 commit="$(git -C "${repo_root}" rev-parse --short HEAD)"
-version="$(git -C "${repo_root}" describe --tags --always 2>/dev/null || echo "${commit}")"
+version="${version_override:-$(git -C "${repo_root}" describe --tags --always 2>/dev/null || echo "${commit}")}"
 plugin_dir="${out_dir}/chrome"
 rm -rf "${plugin_dir}"
 mkdir -p "${plugin_dir}/bin" "${plugin_dir}/skills/berth-chrome"
