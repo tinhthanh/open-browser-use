@@ -317,8 +317,16 @@ func checkShipyard(p shipyardPaths) shipyardStatus {
 			st.RunningVersion = c.VersionName
 		}
 	}
-	st.Ready = st.NativeHost && st.ExtensionInstalled && st.ExtensionIntact && off == nil && (!st.Connected || st.ExtensionCurrent)
+	hasChrome := chromeInstalled()
+	keychain := keychainProblem()
+	st.Ready = hasChrome && keychain == "" && st.NativeHost && st.ExtensionInstalled && st.ExtensionIntact && off == nil && (!st.Connected || st.ExtensionCurrent)
 	switch {
+	case !hasChrome && runtime.GOOS == "darwin":
+		st.Problem = "Google Chrome isn't installed on this Mac: Set up installs it (from dl.google.com, checked to be Google's)"
+	case !hasChrome:
+		st.Problem = "Google Chrome isn't installed: install it from https://www.google.com/chrome/, then run setup again"
+	case keychain != "":
+		st.Problem = keychain
 	case !st.ExtensionIntact:
 		st.Problem = "the extension folder is not the one this plugin ships (" + why + "); run setup again"
 	case !st.NativeHost:
@@ -327,10 +335,12 @@ func checkShipyard(p shipyardPaths) shipyardStatus {
 		st.Problem = "no Chrome profile is turned on for agents (Settings → Plugins → Chrome)"
 	case missing != nil && missing.Dir == shipyardProfile && !st.Profile:
 		st.Problem = "Chrome has no \"" + shipyardProfile + "\" profile yet"
+	case missing != nil && shipyardWebStoreExtensionID != "":
+		st.Problem = "open Chrome in " + profileWords(p, *missing) + ": Chrome adds " + shippedExtensionName() + " from the Chrome Web Store, then turn it on in chrome://extensions"
 	case missing != nil:
-		st.Problem = "load the extension in the \"" + missing.Name + "\" profile (chrome://extensions, Developer mode, Load unpacked)"
+		st.Problem = "load the extension in " + profileWords(p, *missing) + " (chrome://extensions, Developer mode, Load unpacked)"
 	case off != nil:
-		st.Problem = "turn on " + shippedExtensionName() + " in chrome://extensions of the \"" + off.Name + "\" profile"
+		st.Problem = "turn on " + shippedExtensionName() + " in chrome://extensions of " + profileWords(p, *off)
 	case st.Connected && !st.ExtensionCurrent:
 		st.Problem = "Chrome still runs an older copy of the extension; run setup again to reload it"
 	}
@@ -419,7 +429,9 @@ func openShipyardGuide(p shipyardPaths, ap agentProfile) error {
 	switch runtime.GOOS {
 	case "darwin":
 		// --profile-directory creates the profile when it does not exist yet.
-		chrome = exec.Command("open", "-na", "Google Chrome", "--args", "--profile-directory="+ap.Dir, guideURL, "chrome://extensions/")
+		// A Chrome opened for the first time shows its welcome first: it
+		// would sit in front of the guide on a box nobody watches.
+		chrome = exec.Command("open", "-na", "Google Chrome", "--args", "--no-first-run", "--no-default-browser-check", "--profile-directory="+ap.Dir, guideURL, "chrome://extensions/")
 	case "linux":
 		chrome = exec.Command("google-chrome", "--profile-directory="+ap.Dir, guideURL, "chrome://extensions/")
 	default:
@@ -469,6 +481,16 @@ func newShipyardCommand() *cobra.Command {
 			p, err := resolveShipyardPaths(pluginDir)
 			if err != nil {
 				return err
+			}
+			if !chromeInstalled() {
+				if err := installChrome(cmd.OutOrStdout()); err != nil {
+					return err
+				}
+			}
+			if problem := keychainProblem(); problem != "" {
+				// Chrome would stall on its keychain dialog: say so, and
+				// still write what setup writes.
+				fmt.Fprintln(cmd.ErrOrStderr(), problem)
 			}
 			if err := writeEmbeddedExtension(p.ExtensionDir); err != nil {
 				return fmt.Errorf("writing the extension: %w", err)
