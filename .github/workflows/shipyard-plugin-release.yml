@@ -1,0 +1,55 @@
+name: Shipyard plugin release
+
+# The "chrome" plugin for Shipyard, as release archives Shipyard installs
+# from (Settings → Plugins → Install from URL…): a universal macOS build
+# (Apple silicon + Intel) and Linux builds, each with its .sha256 beside it.
+# Tag shipyard-plugin-vX.Y.Z to publish version X.Y.Z.
+
+on:
+  push:
+    tags:
+      - "shipyard-plugin-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./cmd/open-browser-use/
+
+      - name: Package
+        id: pkg
+        run: |
+          version="${GITHUB_REF_NAME#shipyard-plugin-v}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          out="${RUNNER_TEMP}/out"
+          mkdir -p "${out}"
+          scripts/package-shipyard-plugin.sh --arch universal --version "${version}" --out-dir "${RUNNER_TEMP}/darwin"
+          cp "${RUNNER_TEMP}"/darwin/chrome-*.tar.gz* "${out}/"
+          for arch in amd64 arm64; do
+            scripts/package-shipyard-plugin.sh --os linux --arch "${arch}" --version "${version}" --out-dir "${RUNNER_TEMP}/linux-${arch}"
+            cp "${RUNNER_TEMP}"/linux-${arch}/chrome-*.tar.gz* "${out}/"
+          done
+          ls -la "${out}"
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.pkg.outputs.version }}
+        run: |
+          notes="Shipyard's chrome plugin ${VERSION}. In Shipyard: Settings → Plugins → Install from URL…, with the link to the archive for your platform (its SHA-256 is read from the .sha256 beside it). It is off until you allow it."
+          gh release create "${GITHUB_REF_NAME}" "${RUNNER_TEMP}"/out/* --title "Shipyard chrome plugin ${VERSION}" --notes "${notes}"
