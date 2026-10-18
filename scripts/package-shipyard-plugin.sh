@@ -88,6 +88,7 @@ cat > "${plugin_dir}/berth-plugin.json" <<JSON
     "args": ["shipyard", "setup"],
     "status": ["shipyard", "status", "--json"],
     "ready": "ready",
+    "problem": "problem",
     "label": "Load the agent's extension in the Chrome profiles agents may use"
   },
   "settings": {
