@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // shipyardProfilesHome makes a HOME with a Chrome holding "Shipyard Agent",
@@ -187,5 +189,56 @@ func TestWebStoreCopyIsAddedToEveryProfileAndAccepted(t *testing.T) {
 	}
 	if !checkShipyard(p).NativeHost {
 		t.Fatal("status must accept the two-origin manifest")
+	}
+}
+
+func TestMCPOpensTheProfileItWorksInWhenItIsClosed(t *testing.T) {
+	p, write := shipyardProfilesHome(t)
+	t.Setenv("BERTH_PLUGIN_DIR", p.PluginDir)
+	installInProfile(t, p, shipyardProfile, map[string]any{"state": 1})
+	oldWait, oldPoll, oldLaunch := profileOpenWait, profileOpenPoll, launchChromeProfile
+	t.Cleanup(func() { profileOpenWait, profileOpenPoll, launchChromeProfile = oldWait, oldPoll, oldLaunch })
+	profileOpenWait, profileOpenPoll = 200*time.Millisecond, 5*time.Millisecond
+
+	var opened []string
+	var connected atomic.Bool
+	fakeShipyardSockets(t, func() []connectedProfileInfo {
+		if !connected.Load() {
+			return nil
+		}
+		return []connectedProfileInfo{{Directory: shipyardProfile, ExtensionID: p.ExtensionID}}
+	})
+	launchChromeProfile = func(dir string) error {
+		opened = append(opened, dir)
+		connected.Store(true)
+		return nil
+	}
+	server := newMCPServer(socketOptions{})
+	server.shipyardProfiles = true
+	if err := server.selectShipyardProfile(); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.openShipyardProfile(); err != nil || strings.Join(opened, ",") != shipyardProfile {
+		t.Fatalf("a closed profile must be opened once: %v %v", err, opened)
+	}
+	if err := server.openShipyardProfile(); err != nil || len(opened) != 1 {
+		t.Fatalf("an open profile must not be opened again: %v %v", err, opened)
+	}
+
+	// Chrome opens but the extension never connects (a locked screen).
+	connected.Store(false)
+	launchChromeProfile = func(dir string) error { opened = append(opened, dir); return nil }
+	if err := server.openShipyardProfile(); err == nil || !strings.Contains(err.Error(), "did not connect") {
+		t.Fatalf("an extension that never connects must say so: %v", err)
+	}
+
+	// A profile without the extension is not opened: setup has to add it.
+	write(map[string]bool{"profile:Profile 6": true})
+	if _, err := server.useProfileTool(map[string]any{"profile": "Bank"}); err != nil {
+		t.Fatal(err)
+	}
+	opened = nil
+	if err := server.openShipyardProfile(); err == nil || !strings.Contains(err.Error(), "not in the") || len(opened) != 0 {
+		t.Fatalf("a profile without the extension must point to setup, not open: %v %v", err, opened)
 	}
 }
