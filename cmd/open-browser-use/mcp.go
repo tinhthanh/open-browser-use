@@ -588,6 +588,9 @@ func (server *mcpServer) callTool(params json.RawMessage) (map[string]any, error
 		if err := server.selectShipyardProfile(); err != nil {
 			return mcpToolErrorResult(err.Error()), nil
 		}
+		if err := server.openShipyardProfile(); err != nil {
+			return mcpToolErrorResult(err.Error()), nil
+		}
 	}
 	if err := server.checkPinned(); err != nil {
 		return mcpToolErrorResult(err.Error()), nil
@@ -1069,7 +1072,7 @@ func (server *mcpServer) selectShipyardProfile() error {
 	}
 	allowed := allowedAgentProfiles(p)
 	if len(allowed) == 0 {
-		return errors.New("no Chrome profile is turned on for agents: ask the user to turn one on in Shipyard → Settings → Plugins → Chrome")
+		return errors.New("no Chrome profile is turned on for agents: ask the user to turn one on in Shipyard → Settings → Plugins → Chrome (on a box, in that box's row under On boxes)")
 	}
 	pick := ""
 	for _, ap := range allowed {
@@ -1127,7 +1130,7 @@ func (server *mcpServer) useProfileTool(arguments map[string]any) (any, error) {
 			return map[string]any{"profile": ap.Name, "dir": ap.Dir}, nil
 		}
 	}
-	return nil, fmt.Errorf("%q is not a Chrome profile the user allowed for agents; call profiles to see them", want)
+	return nil, fmt.Errorf("%q is not a Chrome profile the user allowed for agents; call profiles to see them, or ask the user to turn it on in Shipyard → Settings → Plugins → Chrome (on a box, in that box's row under On boxes)", want)
 }
 
 func (server *mcpServer) profilesTool() (map[string]any, error) {

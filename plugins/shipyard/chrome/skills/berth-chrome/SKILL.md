@@ -56,5 +56,9 @@ means the browser refused the submit: fix the listed fields.
 - Never type passwords, codes or card numbers unless the user gave them for
   that exact step; if a site needs a login, ask the user to sign in in the
   Chrome window of that profile themselves.
-- If tools fail because the extension is not connected, tell the user to
-  finish the plugin's setup in Shipyard → Settings → Plugins (Set up…).
+- A profile that isn't open is opened for you on the first browser call.
+  If tools still fail because the extension is not connected, tell the user
+  to finish the plugin's setup in Shipyard → Settings → Plugins (Set up…).
+- Which profiles you may use is the user's choice, made per computer in
+  Shipyard → Settings → Plugins → Chrome (a box's own row under "On boxes"
+  for a box). Never change it yourself.
