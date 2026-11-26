@@ -62,6 +62,8 @@ else
   build "${arch}" "${plugin_dir}/bin/open-browser-use"
 fi
 cp "${repo_root}/plugins/shipyard/chrome/skills/berth-chrome/SKILL.md" "${plugin_dir}/skills/berth-chrome/SKILL.md"
+# Its icon in Settings → Plugins (Vetgo; Shipyard ignores it).
+cp "${repo_root}/plugins/shipyard/chrome/icon.svg" "${plugin_dir}/icon.svg"
 
 sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
 bin_sha="$(sha256 "${plugin_dir}/bin/open-browser-use")"
@@ -72,6 +74,7 @@ cat > "${plugin_dir}/berth-plugin.json" <<JSON
   "name": "Chrome",
   "version": "${version}",
   "description": "Lets agents use real Google Chrome: its own \"Shipyard Agent\" profile, and other profiles only if you turn them on (open-browser-use ${version}, ${os}-${arch}).",
+  "icon": "icon.svg",
   "mcp": {
     "chrome": {
       "command": "bin/open-browser-use",
